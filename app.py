@@ -38,58 +38,58 @@ if uploaded_file:
 
     rpm = st.number_input("🔁 Enter motor RPM", min_value=100, max_value=3600, step=10)
 
-    # Prepare data
-    df_use = df[[t_label, x_label, y_label, z_label]].dropna()
-    df_use.columns = ['t', 'x', 'y', 'z']
+    # ⏬ Only process data when button is clicked
+    if st.button("🚀 Run Diagnosis"):
+        df_use = df[[t_label, x_label, y_label, z_label]].dropna()
+        df_use.columns = ['t', 'x', 'y', 'z']
 
-    try:
-        df_use['t'] = pd.to_datetime(df_use['t'], errors='coerce')
-        df_use = df_use.dropna(subset=['t'])
-        df_use = df_use.sort_values('t')
+        try:
+            df_use['t'] = pd.to_datetime(df_use['t'], errors='coerce')
+            df_use = df_use.dropna(subset=['t'])
+            df_use = df_use.sort_values('t')
 
-        # Sample rate calculation using full dataset
-        time_deltas = df_use['t'].diff().dt.total_seconds().dropna()
-        median_interval = time_deltas.median()
-        if median_interval and median_interval > 0:
-            sample_rate = round(1 / median_interval, 5)
-            sample_interval = round(median_interval, 2)
-            st.success(f"📈 Sample Rate ≈ {sample_rate} Hz (1 sample every {sample_interval} seconds)")
-        else:
+            # Sample rate calculation
+            time_deltas = df_use['t'].diff().dt.total_seconds().dropna()
+            median_interval = time_deltas.median()
+            if median_interval and median_interval > 0:
+                sample_rate = round(1 / median_interval, 5)
+                sample_interval = round(median_interval, 2)
+                st.success(f"📈 Sample Rate ≈ {sample_rate} Hz (1 sample every {sample_interval} seconds)")
+            else:
+                sample_rate = 0
+                st.warning("⚠️ Could not compute a valid sample rate.")
+        except Exception as e:
             sample_rate = 0
-            st.warning("⚠️ Could not compute a valid sample rate.")
-    except Exception as e:
-        sample_rate = 0
-        st.error(f"❌ Failed to parse timestamp or calculate sample rate: {e}")
+            st.error(f"❌ Failed to parse timestamp or calculate sample rate: {e}")
 
-    # RMS-based rolling std deviation
-    window_size = 3
-    for axis in ['x', 'y', 'z']:
-        df_use[f'{axis}_std'] = df_use[axis].rolling(window=window_size).std()
+        # Rolling std deviation
+        window_size = 3
+        for axis in ['x', 'y', 'z']:
+            df_use[f'{axis}_std'] = df_use[axis].rolling(window=window_size).std()
 
-    def diagnose(row):
-        faults = []
-        if row['x'] > 0.5 or row['y'] > 0.5:
-            faults.append('🔧 Possible Unbalance or Misalignment')
-        if row['z'] > 0.35:
-            faults.append('📏 Axial Load or Axial Misalignment')
-        if row['x_std'] > 0.05 or row['y_std'] > 0.05 or row['z_std'] > 0.05:
-            faults.append('🔩 Looseness or Variable Load')
-        return ', '.join(faults) if faults else '✅ Normal'
+        def diagnose(row):
+            faults = []
+            if row['x'] > 0.5 or row['y'] > 0.5:
+                faults.append('🔧 Possible Unbalance or Misalignment')
+            if row['z'] > 0.35:
+                faults.append('📏 Axial Load or Axial Misalignment')
+            if row['x_std'] > 0.05 or row['y_std'] > 0.05 or row['z_std'] > 0.05:
+                faults.append('🔩 Looseness or Variable Load')
+            return ', '.join(faults) if faults else '✅ Normal'
 
-    df_use['diagnosis'] = df_use.apply(diagnose, axis=1)
+        df_use['diagnosis'] = df_use.apply(diagnose, axis=1)
 
-    # Display results
-    st.subheader("📋 Diagnosis Results Based on RMS Data")
-    st.dataframe(df_use[['t', 'x', 'y', 'z', 'diagnosis']])
+        # Results
+        st.subheader("📋 Diagnosis Results Based on RMS Data")
+        st.dataframe(df_use[['t', 'x', 'y', 'z', 'diagnosis']])
 
-    st.subheader("📊 Vibration Trend Chart")
-    st.line_chart(df_use.set_index('t')[['x', 'y', 'z']])
+        st.subheader("📊 Vibration Trend Chart")
+        st.line_chart(df_use.set_index('t')[['x', 'y', 'z']])
 
-    st.markdown("""
-    ---
-    ### ℹ️ Notes:
-    - RMS-based diagnosis is suitable for **slow-developing faults**:
-        - Unbalance, looseness, soft foot, misalignment, degradation
-    - For precise bearing fault or cavitation diagnosis, **FFT waveform analysis is needed**
-    - Add more context (e.g., bearing geometry) in future updates for deeper diagnosis
-    """)
+        st.markdown("""
+        ---
+        ### ℹ️ Notes:
+        - RMS-based analysis detects **slow-developing faults**:
+            - Unbalance, looseness, soft foot, misalignment, degradation
+        - Bearing faults and cavitation need waveform/FFT data.
+        """)
