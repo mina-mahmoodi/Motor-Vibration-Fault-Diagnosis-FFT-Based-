@@ -15,13 +15,13 @@ if uploaded_file:
 
     st.markdown("""
     ### Column Names Detected for Vibration Data:
-    - Timestamp X: `t(x)`, X axis vibration: `x`
-    - Timestamp Y: `t(y)`, Y axis vibration: `y`
-    - Timestamp Z: `t(z)`, Z axis vibration: `z`
+    - Timestamp X: `T(X)`, X axis vibration: `X`
+    - Timestamp Y: `T(Y)`, Y axis vibration: `Y`
+    - Timestamp Z: `T(Z)`, Z axis vibration: `Z`
     """)
 
     # Find if columns exist, else show warning
-    expected_cols = ['t(x)', 'x', 't(y)', 'y', 't(z)', 'z']
+    expected_cols = ['T(X)', 'X', 'T(Y)', 'Y', 'T(Z)', 'Z']
     missing_cols = [c for c in expected_cols if c not in df.columns]
     if missing_cols:
         st.warning(f"⚠️ Missing expected columns in sheet: {missing_cols}")
@@ -29,7 +29,7 @@ if uploaded_file:
         # Ask user to select which axis is axial
         axial_axis = st.selectbox(
             "Select which axis is AXIAL vibration (along shaft):",
-            options=['x', 'y', 'z'],
+            options=['X', 'Y', 'Z'],
             index=2,
             help="""
             Axial axis is along the shaft direction.
@@ -41,12 +41,12 @@ if uploaded_file:
 
         # Determine corresponding timestamp columns for chosen axial and radials
         axis_map = {
-            'x': ('t(x)', 'x'),
-            'y': ('t(y)', 'y'),
-            'z': ('t(z)', 'z')
+            'X': ('T(X)', 'X'),
+            'Y': ('T(Y)', 'Y'),
+            'Z': ('T(Z)', 'Z')
         }
         axial_t_col, axial_v_col = axis_map[axial_axis]
-        radial_axes = [a for a in ['x','y','z'] if a != axial_axis]
+        radial_axes = [a for a in ['X','Y','Z'] if a != axial_axis]
         radial_t_cols = [axis_map[a][0] for a in radial_axes]
         radial_v_cols = [axis_map[a][1] for a in radial_axes]
 
