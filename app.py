@@ -1,96 +1,75 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
-from scipy.fft import fft, fftfreq
 
-st.set_page_config(page_title="Motor Vibration Diagnosis", layout="wide")
-st.title("🛠️ Motor Vibration Fault Diagnosis (FFT-Based)")
+st.set_page_config(page_title="Motor RMS Fault Diagnosis", layout="wide")
+st.title("🔍 Motor Fault Diagnosis using RMS Vibration Data")
 
-# Upload Excel file
-uploaded_file = st.file_uploader("Upload Excel vibration dataset", type=["xlsx"])
+uploaded_file = st.file_uploader("📂 Upload your Excel vibration dataset", type=["xlsx"])
 
 if uploaded_file:
-    try:
-        # Load sheet names
-        xls = pd.ExcelFile(uploaded_file)
-        sheet_names = xls.sheet_names
-        sheet = st.selectbox("Select sheet (asset name)", sheet_names)
+    xls = pd.ExcelFile(uploaded_file)
+    sheet_name = st.selectbox("📑 Select the asset sheet from Excel", xls.sheet_names)
 
-        # Load selected sheet
-        df = pd.read_excel(uploaded_file, sheet_name=sheet)
+    df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
 
-        # Check required columns
-        required_cols = ['T(X)', 'X', 'T(Y)', 'Y', 'T(Z)', 'Z']
-        if not all(col in df.columns for col in required_cols):
-            st.error("Selected sheet must include: T(X), X, T(Y), Y, T(Z), Z")
-            st.stop()
+    # Explanation for choosing orientation
+    st.markdown("""
+    **🧭 Machine Orientation Explanation:**
+    - Choose *Horizontal* for machines like centrifugal pumps, horizontally-mounted motors.
+    - Choose *Vertical* for machines like vertical pumps or vertically-mounted motors.
+    """)
 
-        # Rename for ease
-        df = df.rename(columns={'T(X)': 't', 'X': 'x', 'T(Y)': 'ty', 'Y': 'y', 'T(Z)': 'tz', 'Z': 'z'})
-        df = df[['t', 'x', 'y', 'z']].dropna()
+    orientation = st.radio("Select Machine Orientation", ['Horizontal', 'Vertical'])
 
-        # Sample rate estimation
-        df['t'] = pd.to_datetime(df['t'])
-        time_deltas = df['t'].diff().dt.total_seconds().dropna()
-        avg_dt = time_deltas.mean()
-        sample_rate = 1 / avg_dt
-        st.info(f"Estimated sample rate: {sample_rate:.2f} Hz")
+    # Axis explanation
+    st.markdown("""
+    **📌 Axis Direction Explanation:**
+    - Typically:
+        - **Z** = Axial (along shaft)
+        - **X, Y** = Radial (perpendicular to shaft)
+    - Use naming based on your sensor placement.
+    """)
 
-        # User inputs
-        rpm = st.number_input("Motor speed (RPM)", min_value=100, max_value=10000, value=1500)
-        orientation = st.selectbox("Motor installation orientation", ['Horizontal', 'Vertical'])
-        axial_axis = st.selectbox("Which axis is Axial?", ['x', 'y', 'z'])
+    x_label = st.selectbox("Select column for X axis (Radial)", df.columns)
+    y_label = st.selectbox("Select column for Y axis (Radial)", df.columns)
+    z_label = st.selectbox("Select column for Z axis (Axial)", df.columns)
+    t_label = st.selectbox("Select column for Timestamp", df.columns)
 
-        # FFT processing
-        N = len(df)
-        fft_freqs = fftfreq(N, d=1/sample_rate)
-        fft_freqs = fft_freqs[:N//2]
+    rpm = st.number_input("🔁 Enter motor RPM", min_value=100, max_value=3600, step=10)
 
-        axis_data = {}
-        for axis in ['x', 'y', 'z']:
-            signal = df[axis] - np.mean(df[axis])
-            fft_vals = fft(signal)
-            magnitude = 2.0 / N * np.abs(fft_vals[:N//2])
-            axis_data[axis] = (fft_freqs, magnitude)
+    df_use = df[[t_label, x_label, y_label, z_label]].dropna()
+    df_use.columns = ['t', 'x', 'y', 'z']
+    df_use['t'] = pd.to_datetime(df_use['t'])
 
-        st.subheader("🔍 FFT Results and Diagnosis")
-        for axis in ['x', 'y', 'z']:
-            freqs, mags = axis_data[axis]
-            fig = px.line(x=freqs, y=mags, title=f"{axis.upper()} Axis FFT", labels={'x': 'Frequency (Hz)', 'y': 'Amplitude'})
-            st.plotly_chart(fig, use_container_width=True)
+    # Sample rate calculation
+    df_use = df_use.sort_values('t')
+    if len(df_use) > 1:
+        sample_interval_sec = (df_use['t'].iloc[1] - df_use['t'].iloc[0]).total_seconds()
+        sample_rate = 1 / sample_interval_sec if sample_interval_sec > 0 else 0
+    else:
+        sample_rate = 0
 
-            peak_freq = freqs[np.argmax(mags)]
-            peak_rpm = peak_freq * 60
-            st.write(f"**{axis.upper()} Axis peak frequency:** {peak_freq:.2f} Hz ({peak_rpm:.0f} RPM)")
+    st.info(f"⏱️ Sample Rate: {sample_rate:.5f} Hz ({1/sample_rate:.2f} seconds/sample)" if sample_rate else "❗ Sample rate could not be determined.")
 
-            # Diagnosis logic
-            diagnosis = "Unknown"
-            if abs(peak_rpm - rpm) < 5:
-                diagnosis = "Likely Unbalance"
-            elif abs(peak_rpm - 2 * rpm) < 5:
-                diagnosis = "Possible Misalignment"
-            elif peak_freq > 500:
-                diagnosis = "Possible Bearing Fault"
-            elif 0 < peak_freq < 10 and mags.max() > 0.1:
-                diagnosis = "Possible Looseness"
-            else:
-                diagnosis = "No dominant fault detected"
+    # Rolling std deviation
+    window_size = 3
+    for axis in ['x', 'y', 'z']:
+        df_use[f'{axis}_std'] = df_use[axis].rolling(window=window_size).std()
 
-            dir_note = " (Axial)" if axis == axial_axis else " (Radial)"
-            st.markdown(f"📌 **Diagnosis for {axis.upper()}{dir_note}:** {diagnosis}")
+    def diagnose(row):
+        faults = []
+        if row['x'] > 0.5 or row['y'] > 0.5:
+            faults.append('🔧 Possible Unbalance or Misalignment')
+        if row['z'] > 0.35:
+            faults.append('📏 Axial Load or Axial Misalignment')
+        if row['x_std'] > 0.05 or row['y_std'] > 0.05 or row['z_std'] > 0.05:
+            faults.append('🔩 Looseness or Variable Load')
+        return ', '.join(faults) if faults else '✅ Normal'
 
-        st.markdown("---")
-        st.markdown("### ℹ️ Guidance")
-        st.markdown("""
-        - **Motor Orientation**: Helps identify direction-sensitive faults like unbalance (more severe horizontally).
-        - **Axis Labeling**: Typically, axial vibrations (along shaft) show signs of misalignment or thrust issues.
-        - **Fault Patterns**:
-            - 1× RPM → **Unbalance**
-            - 2× RPM → **Misalignment**
-            - High frequencies (500+ Hz) → **Bearing issues**
-            - Sub-10 Hz with high amplitude → **Looseness**
-        """)
+    df_use['diagnosis'] = df_use.apply(diagnose, axis=1)
 
-    except Exception as e:
-        st.error(f"Error: {e}")
+    st.subheader("📋 Diagnosed Results")
+    st.dataframe(df_use[['t', 'x', 'y', 'z', 'diagnosis']])
+
+    st.line_chart(df_use.set_index('t')[['x', 'y', 'z']])
