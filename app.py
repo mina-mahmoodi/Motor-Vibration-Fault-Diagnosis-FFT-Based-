@@ -42,12 +42,22 @@ if uploaded_file:
     df_use.columns = ['t', 'x', 'y', 'z']
     df_use['t'] = pd.to_datetime(df_use['t'])
 
-    # Sample rate calculation
+     # Sample rate calculation with median delta
     df_use = df_use.sort_values('t')
-    if len(df_use) > 1:
-        sample_interval_sec = (df_use['t'].iloc[1] - df_use['t'].iloc[0]).total_seconds()
-        sample_rate = 1 / sample_interval_sec if sample_interval_sec > 0 else 0
-    else:
+    try:
+        df_use['t'] = pd.to_datetime(df_use['t'], errors='coerce')
+        df_use = df_use.dropna(subset=['t'])  # drop rows where timestamp failed to parse
+
+        time_deltas = df_use['t'].diff().dt.total_seconds()
+        median_interval = time_deltas.median()
+        sample_rate = 1 / median_interval if median_interval and median_interval > 0 else 0
+
+        if sample_rate:
+            st.info(f"⏱️ Sample Rate: {sample_rate:.5f} Hz ({1/sample_rate:.2f} seconds/sample)")
+        else:
+            st.warning("⚠️ Sample rate calculated as 0. This might be due to insufficient or invalid timestamps.")
+    except Exception as e:
+        st.error(f"❌ Error parsing timestamps: {e}")
         sample_rate = 0
 
     st.info(f"⏱️ Sample Rate: {sample_rate:.5f} Hz ({1/sample_rate:.2f} seconds/sample)" if sample_rate else "❗ Sample rate could not be determined.")
