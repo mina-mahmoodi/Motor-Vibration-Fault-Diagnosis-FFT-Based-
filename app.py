@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from io import BytesIO
 
 st.set_page_config(page_title="Motor RMS Fault Diagnosis", layout="wide")
 st.title("🔍 Motor Fault Diagnosis using RMS Vibration Data")
@@ -42,7 +43,7 @@ if uploaded_file:
 
         selected_cols = [axial_t_col, axial_v_col] + radial_v_cols
         df_use = df[selected_cols].dropna()
-        df_use.columns = ['t', 'z'] + ['x', 'y']  # standard order
+        df_use.columns = ['t', 'z'] + ['x', 'y']  # standardize: t, radial1, radial2, axial
 
         df_use['t'] = pd.to_datetime(df_use['t'], errors='coerce')
         df_use = df_use.dropna(subset=['t']).sort_values('t')
@@ -57,7 +58,6 @@ if uploaded_file:
             st.warning("⚠️ Sample rate could not be calculated.")
 
         orientation = st.radio("Select Machine Orientation", ['Horizontal', 'Vertical'])
-        rpm = st.number_input("🔁 Enter motor RPM", min_value=100, max_value=3600, step=10)
 
         duration_choice = st.radio("Select diagnosis period:", ['Last 24 hours', 'Last 7 days', 'All data'])
         latest_time = df_use['t'].max()
@@ -76,7 +76,7 @@ if uploaded_file:
             if df_filtered.empty:
                 st.error("No data in selected range.")
             else:
-                window_samples = max(1, int(sample_rate * 60))
+                window_samples = max(1, int(sample_rate * 60))  # 1-minute RMS window
                 st.write(f"Using RMS window: {window_samples} samples (~{window_samples * median_interval:.1f} sec)")
 
                 for axis in ['x', 'y', 'z']:
@@ -101,3 +101,11 @@ if uploaded_file:
 
                 st.subheader("📈 Vibration Trend")
                 st.line_chart(df_filtered.set_index('t')[['x_rms', 'y_rms', 'z_rms']])
+
+                # 📥 Download option
+                to_download = df_filtered[['t', 'x_rms', 'y_rms', 'z_rms', 'Diagnosis']]
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    to_download.to_excel(writer, sheet_name='Diagnosis', index=False)
+                st.download_button("📥 Download Diagnosis Report", data=output.getvalue(),
+                                   file_name="rms_diagnosis_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
