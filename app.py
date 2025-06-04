@@ -22,6 +22,16 @@ def generate_pdf(df, sheet_name):
     elements.append(title)
     elements.append(Spacer(1, 12))
 
+    explanation = """
+    <b>Diagnosis Logic:</b><br/>
+    - Radial RMS > 0.5 indicates possible <i>unbalance or radial misalignment</i>.<br/>
+    - Axial RMS > 0.35 may signal <i>axial load or axial misalignment</i>.<br/>
+    - Significant difference between X and Y RMS (>0.2) may indicate <i>mechanical looseness</i>.<br/>
+    These thresholds are derived from general industrial practice and indicative trends.<br/>
+    """
+    elements.append(Paragraph(explanation, styles['Normal']))
+    elements.append(Spacer(1, 12))
+
     # Prepare table data with headers
     data = [['Timestamp', 'X RMS', 'Y RMS', 'Z RMS', 'Diagnosis']]
     for _, row in df.iterrows():
@@ -65,6 +75,12 @@ if uploaded_file:
         st.warning(f"⚠️ Missing columns: {miss}")
         st.stop()
 
+    st.markdown("""
+    ### ⚙️ Select Axial Axis
+    Please select the axis that aligns with the motor shaft (axial direction).
+    This helps distinguish between axial and radial vibrations.
+    """)
+
     axial_axis = st.selectbox("Select AXIAL axis", ['x', 'y', 'z'], index=2)
     axis_map = {'x': ('t(x)', 'x'), 'y': ('t(y)', 'y'), 'z': ('t(z)', 'z')}
 
@@ -75,11 +91,13 @@ if uploaded_file:
     df_use['t'] = pd.to_datetime(df_use['t'], errors='coerce')
     df_use = df_use.dropna(subset=['t']).sort_values('t')
 
-    dt = df_use['t'].diff().dt.total_seconds().median()
-    sr = 1 / dt if dt and dt > 0 else 0
-    st.info(f"Sample rate ≈ {sr:.3f} Hz" if sr else "Sample rate unknown – using 10-sample window")
-
     orientation = st.radio("Machine orientation", ['Horizontal', 'Vertical'])
+
+    st.markdown("""
+    ### 🗓️ Select Diagnosis Period
+    The diagnosis period is based on the calendar time inferred from the dataset.<br/>
+    For example, "Last 24 hours" means the 24-hour period leading up to the <i>most recent timestamp</i> in the data.
+    """, unsafe_allow_html=True)
 
     period = st.radio("Diagnosis period", ['Last 24 hours', 'Last 7 days', 'All data'])
     end_t = df_use['t'].max()
@@ -88,25 +106,30 @@ if uploaded_file:
         else df_use['t'].min()
 
     df_filt = df_use[df_use['t'] >= start_t].copy()
-    st.write(f"Points in period: **{len(df_filt)}**")
+    st.write(f"Points in selected period: **{len(df_filt)}**")
 
     if st.button("▶️ Run Diagnosis"):
         if df_filt.empty:
             st.error("No data in selected period.")
             st.stop()
 
-        win = max(1, int(sr * 60)) if sr else 10
+        # Use fixed rolling window size (10 samples)
+        win = 10
         for axis in ['x', 'y', 'z']:
             df_filt[f'{axis}_rms'] = df_filt[axis].rolling(
                 window=win, min_periods=1
             ).apply(lambda v: np.sqrt(np.mean(v**2)), raw=True)
 
         def diag(r):
-            f = []
-            if r['x_rms'] > 0.5 or r['y_rms'] > 0.5: f.append("🔧 Radial high (unbalance / misalignment)")
-            if r['z_rms'] > 0.35:                    f.append("📏 Axial high (axial load / misalignment)")
-            if abs(r['x_rms'] - r['y_rms']) > 0.2:  f.append("🔩 Looseness (radial diff)")
-            return "✅ Normal" if not f else ", ".join(f)
+            findings = []
+            if r['x_rms'] > 0.5 or r['y_rms'] > 0.5:
+                findings.append("🔧 Radial high (unbalance / misalignment)")
+            if r['z_rms'] > 0.35:
+                findings.append("📏 Axial high (axial load / misalignment)")
+            if abs(r['x_rms'] - r['y_rms']) > 0.2:
+                findings.append("🔩 Looseness (radial diff)")
+            return "✅ Normal" if not findings else ", ".join(findings)
+
         df_filt['Diagnosis'] = df_filt.apply(diag, axis=1)
 
         st.subheader("📋 Diagnosis (last 50 rows)")
