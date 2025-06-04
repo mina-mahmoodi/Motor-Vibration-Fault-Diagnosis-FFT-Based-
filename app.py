@@ -2,122 +2,121 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
 st.set_page_config(page_title="Motor RMS Fault Diagnosis", layout="wide")
 st.title("🔍 Motor Fault Diagnosis using RMS Vibration Data")
 
 uploaded_file = st.file_uploader("📂 Upload your Excel vibration dataset", type=["xlsx"])
 
+def generate_pdf(df, sheet_name):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    elements = []
+
+    styles = getSampleStyleSheet()
+    title = Paragraph(f"Motor RMS Vibration Diagnosis Report - Asset Sheet: {sheet_name}", styles['Title'])
+    elements.append(title)
+    elements.append(Spacer(1, 12))
+
+    # Prepare table data with headers
+    data = [['Timestamp', 'X RMS', 'Y RMS', 'Z RMS', 'Diagnosis']]
+    for _, row in df.iterrows():
+        data.append([
+            row['t'].strftime("%Y-%m-%d %H:%M:%S"),
+            f"{row['x_rms']:.3f}",
+            f"{row['y_rms']:.3f}",
+            f"{row['z_rms']:.3f}",
+            row['Diagnosis']
+        ])
+
+    # Create table
+    table = Table(data, repeatRows=1)
+    style = TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#d3d3d3')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.black),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 12),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+    ])
+    table.setStyle(style)
+    elements.append(table)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
 if uploaded_file:
     xls = pd.ExcelFile(uploaded_file)
-    sheet_name = st.selectbox("📑 Select the asset sheet from Excel", xls.sheet_names)
+    sheet_name = st.selectbox("📑 Select asset sheet", xls.sheet_names)
     df_raw = pd.read_excel(uploaded_file, sheet_name=sheet_name)
 
-    # Convert column names to lowercase
-    lower_col_map = {col.lower(): col for col in df_raw.columns}
-    df = df_raw.rename(columns={v: k.lower() for k, v in lower_col_map.items()})
+    lower_map = {c.lower(): c for c in df_raw.columns}
+    df = df_raw.rename(columns={orig: lower for lower, orig in lower_map.items()})
 
-    expected_cols = ['t(x)', 'x', 't(y)', 'y', 't(z)', 'z']
-    missing_cols = [col for col in expected_cols if col not in df.columns]
-
-    if missing_cols:
-        st.warning(f"⚠️ Missing expected columns in sheet: {missing_cols}")
+    expected = ['t(x)', 'x', 't(y)', 'y', 't(z)', 'z']
+    miss = [c for c in expected if c not in df.columns]
+    if miss:
+        st.warning(f"⚠️ Missing columns: {miss}")
         st.stop()
 
-    # Axis selection
-    axial_axis = st.selectbox(
-        "Select which axis is AXIAL vibration (along shaft):",
-        options=['x', 'y', 'z'],
-        index=2,
-        help="The other two axes will be considered radial."
-    )
+    axial_axis = st.selectbox("Select AXIAL axis", ['x', 'y', 'z'], index=2)
+    axis_map = {'x': ('t(x)', 'x'), 'y': ('t(y)', 'y'), 'z': ('t(z)', 'z')}
 
-    axis_map = {
-        'x': ('t(x)', 'x'),
-        'y': ('t(y)', 'y'),
-        'z': ('t(z)', 'z')
-    }
-
-    axial_t_col, axial_v_col = axis_map[axial_axis]
-    radial_axes = [a for a in ['x', 'y', 'z'] if a != axial_axis]
-    radial_t_cols = [axis_map[a][0] for a in radial_axes]
-    radial_v_cols = [axis_map[a][1] for a in radial_axes]
-
-    selected_cols = [axial_t_col, axial_v_col] + radial_v_cols
-    df_use = df[selected_cols].dropna()
-    df_use.columns = ['t', 'z'] + ['x', 'y']  # Standard order
-
+    axial_t, axial_v = axis_map[axial_axis]
+    radials = [a for a in ['x', 'y', 'z'] if a != axial_axis]
+    df_use = df[[axial_t, axial_v] + [axis_map[a][1] for a in radials]].dropna()
+    df_use.columns = ['t', 'z', 'x', 'y']
     df_use['t'] = pd.to_datetime(df_use['t'], errors='coerce')
     df_use = df_use.dropna(subset=['t']).sort_values('t')
 
-    time_deltas = df_use['t'].diff().dt.total_seconds()
-    median_interval = time_deltas.median()
-    sample_rate = 1 / median_interval if median_interval and median_interval > 0 else 0
+    dt = df_use['t'].diff().dt.total_seconds().median()
+    sr = 1 / dt if dt and dt > 0 else 0
+    st.info(f"Sample rate ≈ {sr:.3f} Hz" if sr else "Sample rate unknown – using 10-sample window")
 
-    if sample_rate > 0:
-        st.info(f"⏱️ Sample Rate: {sample_rate:.3f} Hz")
-    else:
-        st.warning("⚠️ Sample rate could not be calculated.")
+    orientation = st.radio("Machine orientation", ['Horizontal', 'Vertical'])
 
-    orientation = st.radio("Select Machine Orientation", ['Horizontal', 'Vertical'])
+    period = st.radio("Diagnosis period", ['Last 24 hours', 'Last 7 days', 'All data'])
+    end_t = df_use['t'].max()
+    start_t = end_t - pd.Timedelta(days=1) if period == 'Last 24 hours' \
+        else end_t - pd.Timedelta(days=7) if period == 'Last 7 days' \
+        else df_use['t'].min()
 
-    duration_choice = st.radio("Select diagnosis period:", ['Last 24 hours', 'Last 7 days', 'All data'])
-    latest_time = df_use['t'].max()
-
-    if duration_choice == 'Last 24 hours':
-        start_time = latest_time - pd.Timedelta(days=1)
-    elif duration_choice == 'Last 7 days':
-        start_time = latest_time - pd.Timedelta(days=7)
-    else:
-        start_time = df_use['t'].min()
-
-    df_filtered = df_use[df_use['t'] >= start_time].copy()
-    st.write(f"⏳ Data points selected: {len(df_filtered)}")
+    df_filt = df_use[df_use['t'] >= start_t].copy()
+    st.write(f"Points in period: **{len(df_filt)}**")
 
     if st.button("▶️ Run Diagnosis"):
-        if df_filtered.empty:
-            st.error("No data in selected range.")
+        if df_filt.empty:
+            st.error("No data in selected period.")
             st.stop()
 
-        window_samples = max(1, int(sample_rate * 60)) if sample_rate > 0 else 10
-        st.write(f"Using RMS window: {window_samples} samples (~{window_samples * median_interval:.1f} sec)")
-
+        win = max(1, int(sr * 60)) if sr else 10
         for axis in ['x', 'y', 'z']:
-            df_filtered[f'{axis}_rms'] = df_filtered[axis].rolling(
-                window=window_samples, min_periods=1
-            ).apply(lambda x: np.sqrt(np.mean(x ** 2)), raw=True)
+            df_filt[f'{axis}_rms'] = df_filt[axis].rolling(
+                window=win, min_periods=1
+            ).apply(lambda v: np.sqrt(np.mean(v**2)), raw=True)
 
-        def diagnose_rms(row):
-            faults = []
-            if row['x_rms'] > 0.5 or row['y_rms'] > 0.5:
-                faults.append("🔧 Possible Unbalance or Misalignment (Radial)")
-            if row['z_rms'] > 0.35:
-                faults.append("📏 Axial Load or Axial Misalignment")
-            if abs(row['x_rms'] - row['y_rms']) > 0.2:
-                faults.append("🔩 Possible Looseness")
-            return "✅ Normal" if not faults else ", ".join(faults)
+        def diag(r):
+            f = []
+            if r['x_rms'] > 0.5 or r['y_rms'] > 0.5: f.append("🔧 Radial high (unbalance / misalignment)")
+            if r['z_rms'] > 0.35:                    f.append("📏 Axial high (axial load / misalignment)")
+            if abs(r['x_rms'] - r['y_rms']) > 0.2:  f.append("🔩 Looseness (radial diff)")
+            return "✅ Normal" if not f else ", ".join(f)
+        df_filt['Diagnosis'] = df_filt.apply(diag, axis=1)
 
-        df_filtered['Diagnosis'] = df_filtered.apply(diagnose_rms, axis=1)
+        st.subheader("📋 Diagnosis (last 50 rows)")
+        st.dataframe(df_filt[['t', 'x_rms', 'y_rms', 'z_rms', 'Diagnosis']].tail(50))
 
-        st.subheader("📋 Sample Diagnosis (last 50 rows)")
-        st.dataframe(df_filtered[['t', 'x_rms', 'y_rms', 'z_rms', 'Diagnosis']].tail(50))
-
-        # Create downloadable Excel report
-        output = BytesIO()
-        sheet_label = f"Diagnosis - {sheet_name[:25]}"  # Excel limit is 31 chars
-
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            workbook = writer.book
-            df_to_save = df_filtered[['t', 'x_rms', 'y_rms', 'z_rms', 'Diagnosis']]
-            df_to_save.to_excel(writer, sheet_name=sheet_label, index=False, startrow=2)
-
-            worksheet = writer.sheets[sheet_label]
-            bold = workbook.add_format({'bold': True})
-            worksheet.write('A1', f"Asset Sheet: {sheet_name}", bold)
+        pdf_buffer = generate_pdf(df_filt.tail(50), sheet_name)
 
         st.download_button(
-            label="📥 Download Excel Report",
-            data=output.getvalue(),
-            file_name=f"rms_diagnosis_{sheet_name}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            label="📥 Download PDF Report",
+            data=pdf_buffer,
+            file_name=f"rms_diagnosis_{sheet_name}.pdf",
+            mime="application/pdf"
         )
